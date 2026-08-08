@@ -38,9 +38,13 @@ python -c "from app.llm import LLMClient; print(LLMClient().mode)"
 Seed the review queue, then serve the API:
 
 ```bash
-python -m scripts.run_batch --limit 12     # ~5 min, ~40 LLM calls
+python -m scripts.run_batch --limit 12     # several minutes - see note below
 uvicorn app.api:app --reload
 ```
+
+> The free tier meters ~8,000 tokens/minute, and one investigation costs ~6–9k.
+> The client backs off on the provider's own reset headers rather than a guess,
+> so a batch is slow but does not fail. Pauses during the run are expected.
 
 Open <http://127.0.0.1:8000/docs>. The demo path is:
 
@@ -237,8 +241,12 @@ never a crash and never a guess.
 
 `app/llm.py`, as the brief requires:
 
-- Exponential backoff with **full jitter**, capped at 16 s, honouring `Retry-After`
 - Retries on 429/500/502/503/504/529 and on transport timeouts
+- **Waits as long as the provider says to**, not as long as a formula guesses.
+  On a 429 the client reads `Retry-After`, then `x-ratelimit-reset-tokens`, then
+  `x-ratelimit-reset-requests`, parsing both plain seconds and Groq's compact
+  duration format (`105ms`, `7.66s`, `1m26.4s`). Exponential backoff with full
+  jitter is only the fallback when no header is present
 - JSON extraction from prose, ```json fences, or a balanced-brace span, plus
   trailing-comma repair — free-tier models routinely wrap JSON in chatter
 - Malformed JSON is retried with a **raised temperature** (same prompt, new sample)
@@ -259,8 +267,15 @@ All of this was exercised for real, not hypothetically:
   mode in the trace rather than take this paragraph on trust.
 
 The practical lesson: on a free tier, quota is a first-class failure mode, and
-per-day limits are per-model — so the recovery is often "switch model", which is
-one environment variable here.
+limits are per-model — so the recovery is often "switch model", which is one
+environment variable here.
+
+Concretely, the free tier meters **8,000 tokens per minute** for this model. A
+3-step investigation costs roughly 6–9k tokens, so the honest throughput is about
+one investigation per minute and `run_batch --limit 12` takes several minutes.
+Backing off by formula under-waits a 60-second window and burns the retry budget
+achieving nothing, which is exactly what happened before the client was taught to
+read the reset headers.
 
 ### Untrusted input
 

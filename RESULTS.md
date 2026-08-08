@@ -93,6 +93,14 @@ the results deliberately rather than re-run, because a reviewer should be able t
 see it in the audit trail. **11 of 12 are genuine verdicts, above the brief's
 floor of 10.**
 
+Diagnosing this row led to a real fix. The free tier meters **8,000 tokens per
+minute**; the client's exponential backoff topped out around 15 seconds total,
+so it could never outwait a 60-second window and simply spent its four retries
+failing. Groq publishes the refill time in `x-ratelimit-reset-tokens`, so the
+client now backs off on that (and on `Retry-After`) instead of guessing. Re-run
+after the fix, the same pair that produced this row completes in 6 steps with a
+`DUPLICATE @ 0.92` verdict.
+
 ## Evidence that this is an agent, not a pipeline
 
 The brief warns it will probe for a fixed pipeline. From the table:

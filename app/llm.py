@@ -119,8 +119,15 @@ class LLMClient:
                 self.calls += 1
 
                 if resp.status_code in (429, 500, 502, 503, 504, 529):
-                    last_error = f"http {resp.status_code}: {resp.text[:180]}"
-                    self._sleep(attempt, resp.headers.get("Retry-After"))
+                    last_error = f"http {resp.status_code}: {resp.text[:400]}"
+                    # Groq's free tier meters tokens per MINUTE, and says exactly
+                    # when the bucket refills. Guessing with exponential backoff
+                    # under-waits a 60s window and burns the retry budget for
+                    # nothing, so prefer what the provider tells us.
+                    self._sleep(attempt,
+                                resp.headers.get("Retry-After")
+                                or resp.headers.get("x-ratelimit-reset-tokens")
+                                or resp.headers.get("x-ratelimit-reset-requests"))
                     continue
                 if resp.status_code >= 400:
                     raise LLMError(f"http {resp.status_code}: {resp.text[:300]}")
@@ -146,12 +153,38 @@ class LLMClient:
         raise LLMError(f"exhausted {config.LLM_MAX_RETRIES} attempts; last error: {last_error}")
 
     @staticmethod
-    def _sleep(attempt: int, retry_after: str | None) -> None:
-        if retry_after:
-            try:
-                time.sleep(min(float(retry_after), 30.0))
-                return
-            except ValueError:
-                pass
+    def _parse_wait(value: str | None) -> float | None:
+        """Seconds from a Retry-After or an x-ratelimit-reset-* header.
+
+        Retry-After is plain seconds ("20"). Groq's reset headers use a compact
+        duration instead ("105ms", "7.66s", "1m26.4s"), so parse both rather than
+        silently falling through to a guess.
+        """
+        if not value:
+            return None
+        value = value.strip()
+        try:
+            return float(value)
+        except ValueError:
+            pass
+        m = re.fullmatch(r"(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?|(\d+(?:\.\d+)?)ms",
+                         value, re.I)
+        if not m:
+            return None
+        if m.group(3) is not None:
+            return float(m.group(3)) / 1000.0
+        mins, secs = m.group(1), m.group(2)
+        if mins is None and secs is None:
+            return None
+        return float(mins or 0) * 60 + float(secs or 0)
+
+    @classmethod
+    def _sleep(cls, attempt: int, retry_after: str | None) -> None:
+        wait = cls._parse_wait(retry_after)
+        if wait is not None:
+            # A tiny reset ("105ms") means the bucket is already nearly full and
+            # the 429 was a burst; still pause briefly so we do not hot-loop.
+            time.sleep(min(max(wait, 0.5), 65.0))
+            return
         # Exponential backoff with full jitter, capped.
         time.sleep(min(16.0, (2 ** attempt)) * (0.5 + random.random() / 2))

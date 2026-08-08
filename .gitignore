@@ -1,0 +1,16 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+
+# Secrets. .env.example is committed and must only ever hold placeholders.
+.env
+.env.*
+!.env.example
+
+# Generated at runtime by store.init_db()
+data/triage.db
+data/*.bak

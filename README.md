@@ -410,6 +410,49 @@ Two things worth saying plainly about this:
 
 ---
 
+## Optional extension — the React inbox
+
+The brief allows **at most one** optional extension. This is it; the embedding
+tool and the precision/recall measurement were not attempted.
+
+A single React + TypeScript screen over the existing API. No routing, no state
+library, no component framework — `useState` and `fetch`, as the brief describes.
+
+```bash
+# terminal 1 - the API
+uvicorn app.api:app --reload
+
+# terminal 2 - the UI
+cd web
+npm install
+npm run dev          # http://localhost:5173
+```
+
+Left pane is the queue (toggle `awaiting review` / `finalised`). Right pane is
+one investigation: both cases, the agent's label, confidence and rationale, the
+evidence list, and the full audit trail with each event expandable to its raw JSON.
+Below that, the decision controls — Approve, Reject, or Override to a chosen
+label.
+
+Three things worth noting about how it is built:
+
+- **`/api/*` is proxied to FastAPI by Vite** (`web/vite.config.ts`) rather than
+  called cross-origin, so the backend needs no CORS middleware added purely for
+  an optional UI.
+- **`Label` is the same three-value union as the backend enum**
+  (`web/src/api.ts`). The UI cannot invent a status string any more than the
+  agent can.
+- **Backend refusals are surfaced verbatim, not hidden.** Rejecting without a
+  note shows the 422; deciding twice shows the 409. The form deliberately does
+  not pre-validate those rules, because the point is that **the gate is enforced
+  server-side** — the UI is just another client, with no privileges.
+
+`npm run typecheck` passes under `strict`, and `npm run build` produces a
+production bundle. Verified end to end against the running API: 422 on a
+note-less reject, 200 on approve, 409 on a second decision.
+
+---
+
 ## Offline fallback — an honest caveat
 
 With no API key, `_offline_plan()` in `app/agent.py` substitutes a deterministic
@@ -488,10 +531,11 @@ In priority order:
    deciding at cluster level.
 5. **Close the learning loop.** Human overrides are already recorded alongside the
    agent's draft. Feed disagreements back as few-shot examples.
-6. **The React inbox** (the brief's most-valued extension) — a single screen over
-   the existing API.
-7. **Cheaper triage.** Let the model answer immediately when `compare_fields`
+6. **Cheaper triage.** Let the model answer immediately when `compare_fields`
    plus `account_identity_check` already settle it.
+7. **Grow the inbox** into a real queue: filter by label, sort by confidence,
+   and surface the low-confidence and injection-flagged items first, so a
+   reviewer's attention goes where the agent is least sure.
 
 ---
 
@@ -532,11 +576,25 @@ I can explain and defend every line, which is the condition the brief attaches.
 
 ## Time spent
 
-**About 4 hours**, within the timebox.
+**About 4 hours 45 minutes**, including the optional React inbox. Slightly over
+the 4-hour timebox, and reported as such.
 
-Roughly: 15 min environment and key, 20 min reading the data, 25 min candidate
-generation, ~1 h 45 the agent loop and tools, 25 min the API and trace, 25 min
-this README, with the remainder on the live run and the budget fix it surfaced.
+| | |
+|---|---|
+| Environment and a free API key | 15 min |
+| Reading the data before writing anything | 20 min |
+| Part 1 — candidate generation | 25 min |
+| Part 2 — the agent loop and tools | 1 h 45 |
+| Part 3 — the API and the audit trail | 25 min |
+| README and `RESULTS.md` | 30 min |
+| Running against a live model — the tool-budget bug, then rate limits | 20 min |
+| Optional extension — the React inbox | 45 min |
+
+The 20 minutes on the live run was the least planned and the most useful. It
+surfaced the tool-budget bug that all 30 passing tests had missed, and the
+free-tier rate limits that led to comparing models and fixing the backoff. That
+is the difference between a system that passes its tests and one that has
+actually been observed working.
 
 ---
 
@@ -560,6 +618,10 @@ scripts/
   show_candidates.py, rank_check.py
 tests/             30 tests: candidate recall, agent bounds and rails, the gate
 conftest.py        makes a bare `pytest` work, not just `python -m pytest`
+web/               optional extension - React + TypeScript review inbox
+  src/api.ts       typed client; Label mirrors the backend enum
+  src/App.tsx      the whole screen: queue, detail, trace, decision controls
+  vite.config.ts   proxies /api to FastAPI so no CORS is needed
 data/support_cases.csv
 RESULTS.md         the 12-pair run, per-pair tools, and where the agent is weakest
 ```
